@@ -61,7 +61,6 @@ plc_src/                    -> carpeta por defecto para el codigo ST de los
                                 archivo .st por objeto, reflejando la
                                 estructura de carpetas del proyecto
 scripts/
-  hola_codesys.py            -> smoke test, no necesita ningun proyecto abierto
   compilar_proyecto.py       -> abre un .project, compila la aplicacion activa y
                                  reporta errores/warnings (exit code 0/1)
   sincronizar_codesys.py     -> importa POUs de CODESYS a la carpeta destino,
