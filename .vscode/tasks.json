@@ -1,0 +1,149 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "CODESYS: Ejecutar script actual (sin interfaz)",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}\\.vscode\\run-codesys-script.ps1",
+                "-ExePath", "${config:codesys.exePath}",
+                "-ProfileName", "${config:codesys.profile}",
+                "-ScriptPath", "${file}",
+                "-NoUI"
+            ],
+            "options": {
+                "env": {
+                    "CODESYS_PROJECT_PATH": "${config:codesys.projectPath}"
+                }
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "CODESYS: Ejecutar script actual (con interfaz)",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}\\.vscode\\run-codesys-script.ps1",
+                "-ExePath", "${config:codesys.exePath}",
+                "-ProfileName", "${config:codesys.profile}",
+                "-ScriptPath", "${file}"
+            ],
+            "options": {
+                "env": {
+                    "CODESYS_PROJECT_PATH": "${config:codesys.projectPath}"
+                }
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "CODESYS: Compilar proyecto",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}\\.vscode\\run-codesys-script.ps1",
+                "-ExePath", "${config:codesys.exePath}",
+                "-ProfileName", "${config:codesys.profile}",
+                "-ScriptPath", "${workspaceFolder}\\scripts\\compilar_proyecto.py",
+                "-NoUI",
+                "-ProjectPath", "${config:codesys.projectPath}"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            }
+        },
+        {
+            "label": "CODESYS: Importar POUs",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}\\.vscode\\run-codesys-script.ps1",
+                "-ExePath", "${config:codesys.exePath}",
+                "-ProfileName", "${config:codesys.profile}",
+                "-ScriptPath", "${workspaceFolder}\\scripts\\sincronizar_codesys.py",
+                "-NoUI",
+                "-ProjectPath", "${config:codesys.projectPath}"
+            ],
+            "options": {
+                "env": {
+                    "CODESYS_ACCION": "importar",
+                    "CODESYS_SRC_DIR": "${config:codesys.srcDir}"
+                }
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            }
+        },
+        {
+            "label": "PyCodesys: Abrir interfaz grafica",
+            "type": "process",
+            "command": "py",
+            "args": [
+                "${workspaceFolder}\\gui_codesys.py"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "CODESYS: Sincronizar y compilar",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}\\.vscode\\run-codesys-script.ps1",
+                "-ExePath", "${config:codesys.exePath}",
+                "-ProfileName", "${config:codesys.profile}",
+                "-ScriptPath", "${workspaceFolder}\\scripts\\sincronizar_codesys.py",
+                "-NoUI",
+                "-ProjectPath", "${config:codesys.projectPath}"
+            ],
+            "options": {
+                "env": {
+                    "CODESYS_ACCION": "sincronizar",
+                    "CODESYS_SRC_DIR": "${config:codesys.srcDir}"
+                }
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            }
+        }
+    ]
+}

@@ -1,0 +1,28 @@
+{
+    // Ruta al ejecutable y perfil instalados en esta VM (ver README.md -> "Si CODESYS se actualiza").
+    "codesys.exePath": "C:\\Program Files\\CODESYS 3.5.14.10\\CODESYS\\Common\\CODESYS.exe",
+    "codesys.profile": "CODESYS V3.5 SP14 Patch 1",
+
+    // Ruta al .project con el que trabajas ahora mismo. La usan las tareas
+    // "CODESYS: Compilar proyecto / Importar POUs / Sincronizar y compilar",
+    // y tambien la interfaz grafica (gui_codesys.py).
+    // Ponla aqui una vez (ruta completa, ej. "C:\\Proyectos\\MiMaquina.project")
+    // en vez de escribirla cada vez.
+    "codesys.projectPath": "",
+
+    // Carpeta donde se guardan/leen los .st (Importar POUs / Sincronizar).
+    // Vacio = usar la carpeta por defecto "plc_src" dentro de este repo.
+    "codesys.srcDir": "",
+
+    "files.associations": {
+        "*.py": "python"
+    },
+
+    // CODESYS inyecta variables globales (system, projects, online, ...) al ejecutar el script,
+    // por eso Pylance no puede resolverlas de forma estatica.
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.diagnosticSeverityOverrides": {
+        "reportUndefinedVariable": "none",
+        "reportMissingModuleSource": "none"
+    }
+}
