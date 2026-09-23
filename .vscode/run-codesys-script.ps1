@@ -38,6 +38,22 @@ if (-not (Test-Path -LiteralPath $ExePath)) {
     exit 1
 }
 
+# Ultimo proyecto y carpeta de .st elegidos en la GUI, guardados en
+# rutas_codesys.json en la raiz del repo (fuera de .vscode, que es una
+# carpeta oculta). Las tareas de VSCode no pueden leer ese archivo con
+# ${config:...}, asi que se lee aqui. Lo que venga por parametro o por
+# variable de entorno (la GUI pasa ambos) tiene prioridad.
+$rutasPath = Join-Path (Split-Path -Parent $PSScriptRoot) "rutas_codesys.json"
+if (Test-Path -LiteralPath $rutasPath) {
+    $rutas = Get-Content -LiteralPath $rutasPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not $ProjectPath) {
+        $ProjectPath = $rutas.projectPath
+    }
+    if (-not $env:CODESYS_SRC_DIR) {
+        $env:CODESYS_SRC_DIR = $rutas.srcDir
+    }
+}
+
 if ($ProjectPath) {
     $env:CODESYS_PROJECT_PATH = $ProjectPath
 }

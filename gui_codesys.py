@@ -4,11 +4,12 @@
 # comprobo directamente: "No module named Tkinter"/"tkinter").
 #
 # Lanza CODESYS.exe en modo --noUI a traves de .vscode/run-codesys-script.ps1
-# (el mismo wrapper que usan las tareas de VSCode) para dos acciones:
+# (el mismo wrapper que usan las tareas de VSCode) para tres acciones:
 #   - Importar POUs: trae el codigo de los POUs del proyecto a la carpeta
 #     destino elegida (por defecto plc_src/*.st)
-#   - Sincronizar y compilar: sube esos .st al proyecto, compila y reporta
-#     errores/warnings
+#   - Sincronizar: sube esos .st al proyecto y lo guarda (sin compilar, asi
+#     sirve tambien para librerias .library)
+#   - Compilar: compila la aplicacion activa y reporta errores/warnings
 #
 # Uso: py gui_codesys.py
 # (o desde VSCode, con este archivo abierto: Ctrl+Shift+B, o Ctrl+Shift+P ->
@@ -30,16 +31,31 @@ from tkinter import filedialog, messagebox, scrolledtext
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(BASE_DIR, ".vscode", "settings.json")
+# Ultimo proyecto y carpeta de .st elegidos. Van en un archivo visible en la
+# raiz del repo, no en .vscode/ (carpeta oculta). Tambien lo lee
+# run-codesys-script.ps1, asi las tareas de VSCode usan las mismas rutas.
+RUTAS_PATH = os.path.join(BASE_DIR, "rutas_codesys.json")
 WRAPPER_PATH = os.path.join(BASE_DIR, ".vscode", "run-codesys-script.ps1")
-SCRIPT_PATH = os.path.join(BASE_DIR, "scripts", "sincronizar_codesys.py")
+SCRIPT_SINCRONIZAR = os.path.join(BASE_DIR, "scripts", "sincronizar_codesys.py")
+SCRIPT_COMPILAR = os.path.join(BASE_DIR, "scripts", "compilar_proyecto.py")
 SRC_DIR_POR_DEFECTO = os.path.join(BASE_DIR, "plc_src")
 
 CREATE_NO_WINDOW = 0x08000000
 
 
+def leer_rutas():
+    """Lee rutas_codesys.json ({"projectPath": ..., "srcDir": ...}). Si no
+    existe todavia (primera vez), devuelve las rutas vacias."""
+    try:
+        with open(RUTAS_PATH, "r", encoding="utf-8-sig") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+
 def leer_config():
-    """Lee codesys.exePath / codesys.profile / codesys.projectPath / codesys.srcDir
-    de settings.json.
+    """Lee codesys.exePath / codesys.profile de settings.json y
+    projectPath / srcDir de rutas_codesys.json.
 
     settings.json admite comentarios (formato jsonc de VSCode), asi que se
     extraen los valores con regex en vez de json.load para no romper con
@@ -55,29 +71,23 @@ def leer_config():
             return ""
         return json.loads('"' + m.group(1) + '"')
 
+    rutas = leer_rutas()
     return {
         "exePath": extraer("codesys.exePath"),
         "profile": extraer("codesys.profile"),
-        "projectPath": extraer("codesys.projectPath"),
-        "srcDir": extraer("codesys.srcDir"),
+        "projectPath": rutas.get("projectPath", ""),
+        "srcDir": rutas.get("srcDir", ""),
     }
 
 
-def guardar_valor(clave, nuevo_valor):
-    """Actualiza solo el valor de esa clave en settings.json, preservando el
-    resto del archivo (incluidos los comentarios) tal cual esta. Si la clave
-    no existe en el archivo, no hace nada (no se inventan claves nuevas)."""
-    with open(SETTINGS_PATH, "r") as f:
-        contenido = f.read()
-
-    valor_json = json.dumps(nuevo_valor)
-    patron = r'("' + re.escape(clave) + r'"\s*:\s*)"(?:[^"\\]|\\.)*"'
-    nuevo_contenido, n = re.subn(patron, lambda m: m.group(1) + valor_json, contenido, count=1)
-    if n == 0:
-        return
-
-    with open(SETTINGS_PATH, "w") as f:
-        f.write(nuevo_contenido)
+def guardar_ruta(clave, nuevo_valor):
+    """Guarda una ruta (projectPath o srcDir) en rutas_codesys.json,
+    conservando la otra. Crea el archivo si no existe."""
+    rutas = leer_rutas()
+    rutas[clave] = nuevo_valor
+    with open(RUTAS_PATH, "w", encoding="utf-8") as f:
+        json.dump(rutas, f, indent=4, ensure_ascii=False)
+        f.write("\n")
 
 
 class AppCodesys(tk.Tk):
@@ -116,11 +126,14 @@ class AppCodesys(tk.Tk):
         marco_botones = tk.Frame(self, padx=10, pady=4)
         marco_botones.pack(fill="x")
 
-        self.btn_importar = tk.Button(marco_botones, text="Importar POUs", width=20, command=self._importar)
-        self.btn_importar.pack(side="left", padx=(0, 8))
-
-        self.btn_sincronizar = tk.Button(marco_botones, text="Sincronizar y compilar", width=20, command=self._sincronizar)
-        self.btn_sincronizar.pack(side="left")
+        self.botones = []
+        for texto, accion in (("Importar POUs", "importar"),
+                              ("Sincronizar", "sincronizar"),
+                              ("Compilar", "compilar")):
+            boton = tk.Button(marco_botones, text=texto, width=20,
+                              command=lambda a=accion: self._ejecutar_accion(a))
+            boton.pack(side="left", padx=(0, 8))
+            self.botones.append(boton)
 
         self.texto_salida = scrolledtext.ScrolledText(self, state="disabled", font=("Consolas", 10))
         self.texto_salida.pack(fill="both", expand=True, padx=10, pady=10)
@@ -128,12 +141,12 @@ class AppCodesys(tk.Tk):
     def _elegir_proyecto(self):
         ruta = filedialog.askopenfilename(
             title="Selecciona el proyecto CODESYS",
-            filetypes=[("Proyecto CODESYS", "*.project"), ("Todos los archivos", "*.*")],
+            filetypes=[("Proyecto o libreria CODESYS", "*.project *.library"), ("Todos los archivos", "*.*")],
         )
         if not ruta:
             return
         self.project_path.set(ruta)
-        guardar_valor("codesys.projectPath", ruta)
+        guardar_ruta("projectPath", ruta)
 
     def _elegir_src_dir(self):
         ruta = filedialog.askdirectory(
@@ -144,7 +157,7 @@ class AppCodesys(tk.Tk):
             return
         ruta = os.path.normpath(ruta)
         self.src_dir.set(ruta)
-        guardar_valor("codesys.srcDir", ruta)
+        guardar_ruta("srcDir", ruta)
 
     def _log(self, texto):
         self.texto_salida.configure(state="normal")
@@ -157,12 +170,6 @@ class AppCodesys(tk.Tk):
         self.texto_salida.delete("1.0", "end")
         self.texto_salida.configure(state="disabled")
 
-    def _importar(self):
-        self._ejecutar_accion("importar")
-
-    def _sincronizar(self):
-        self._ejecutar_accion("sincronizar")
-
     def _ejecutar_accion(self, accion):
         if self.proceso_corriendo:
             messagebox.showinfo("PyCodesys", "Ya hay una accion en curso, espera a que termine.")
@@ -170,7 +177,7 @@ class AppCodesys(tk.Tk):
 
         ruta_proyecto = self.project_path.get().strip()
         if not ruta_proyecto:
-            messagebox.showwarning("PyCodesys", "Primero selecciona un proyecto CODESYS (.project).")
+            messagebox.showwarning("PyCodesys", "Primero selecciona un proyecto CODESYS (.project o .library).")
             return
         if not os.path.isfile(ruta_proyecto):
             messagebox.showerror("PyCodesys", "No existe el archivo:\n" + ruta_proyecto)
@@ -194,8 +201,8 @@ class AppCodesys(tk.Tk):
         self._log("")
 
         self.proceso_corriendo = True
-        self.btn_importar.configure(state="disabled")
-        self.btn_sincronizar.configure(state="disabled")
+        for boton in self.botones:
+            boton.configure(state="disabled")
 
         hilo = threading.Thread(
             target=self._correr_proceso,
@@ -206,15 +213,19 @@ class AppCodesys(tk.Tk):
 
     def _correr_proceso(self, accion, ruta_proyecto, ruta_src, config):
         env = os.environ.copy()
-        env["CODESYS_ACCION"] = accion
-        env["CODESYS_SRC_DIR"] = ruta_src
+        if accion == "compilar":
+            script = SCRIPT_COMPILAR
+        else:
+            script = SCRIPT_SINCRONIZAR
+            env["CODESYS_ACCION"] = accion
+            env["CODESYS_SRC_DIR"] = ruta_src
 
         comando = [
             "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
             "-File", WRAPPER_PATH,
             "-ExePath", config["exePath"],
             "-ProfileName", config["profile"],
-            "-ScriptPath", SCRIPT_PATH,
+            "-ScriptPath", script,
             "-NoUI",
             "-ProjectPath", ruta_proyecto,
         ]
@@ -249,8 +260,8 @@ class AppCodesys(tk.Tk):
                     self._log("")
                     self._log("(proceso terminado, codigo de salida %s)" % valor)
                     self.proceso_corriendo = False
-                    self.btn_importar.configure(state="normal")
-                    self.btn_sincronizar.configure(state="normal")
+                    for boton in self.botones:
+                        boton.configure(state="normal")
         except queue.Empty:
             pass
         self.after(100, self._revisar_cola)

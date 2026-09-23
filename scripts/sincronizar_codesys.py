@@ -3,17 +3,20 @@
 #
 # Que hace lo controla la variable de entorno CODESYS_ACCION:
 #   CODESYS_ACCION=importar     -> vuelca los POUs del proyecto a la carpeta destino
-#   CODESYS_ACCION=sincronizar  -> sube los .st de la carpeta al proyecto, guarda,
-#                                   compila la aplicacion activa y reporta
-#                                   errores/warnings
+#   CODESYS_ACCION=sincronizar  -> sube los .st de la carpeta al proyecto y guarda
 #
-# Tambien requiere CODESYS_PROJECT_PATH con la ruta al .project.
+# No compila: eso lo hace scripts/compilar_proyecto.py, por separado, para
+# poder sincronizar tambien librerias (.library), que no tienen aplicacion
+# activa que compilar.
+#
+# Tambien requiere CODESYS_PROJECT_PATH con la ruta al .project o .library.
 # CODESYS_SRC_DIR es opcional: si no se define, se usa plc_src/ junto al repo.
 #
 # Pensado para lanzarse desde gui_codesys.py (la interfaz grafica) o desde
-# las tareas de VSCode "CODESYS: Importar POUs" / "CODESYS: Sincronizar y
-# compilar", que ya ponen estas variables de entorno.
+# las tareas de VSCode "CODESYS: Importar POUs" / "CODESYS: Sincronizar",
+# que ya ponen estas variables de entorno.
 
+import io
 import os
 import sys
 
@@ -36,7 +39,7 @@ if accion not in ACCIONES_VALIDAS:
     system.exit(1)
 
 if not project_path:
-    print("ERROR: falta la variable de entorno CODESYS_PROJECT_PATH con la ruta al .project")
+    print("ERROR: falta la variable de entorno CODESYS_PROJECT_PATH con la ruta al .project o .library")
     system.exit(1)
 
 if not os.path.isfile(project_path):
@@ -54,8 +57,11 @@ def importar(project):
             os.makedirs(carpeta)
         archivo = os.path.join(carpeta, ruta[-1] + ".st")
         contenido = _pou_paths.texto_a_archivo(obj)
-        with open(archivo, "w") as f:
-            f.write(contenido)
+        # UTF-8 explicito: open() de IronPython 2.7 escribe en ASCII y rompe
+        # con cualquier caracter no ASCII del codigo (acentos, simbolos como
+        # el "distinto de" en comentarios, etc.)
+        with io.open(archivo, "w", encoding="utf-8") as f:
+            f.write(unicode(contenido))
         exportados.append("/".join(ruta))
 
     _pou_paths.recorrer_pous(project, exportar_uno)
@@ -86,7 +92,8 @@ def sincronizar(project):
             segmentos = ruta_relativa.replace("\\", "/").split("/")
             segmentos[-1] = segmentos[-1][:-len(".st")]
 
-            with open(ruta_archivo, "r") as f:
+            # utf-8-sig: tolera el BOM si algun editor lo agrega al guardar
+            with io.open(ruta_archivo, "r", encoding="utf-8-sig") as f:
                 contenido = f.read()
 
             try:
@@ -118,43 +125,11 @@ def sincronizar(project):
     for a in actualizados:
         print("  - " + a)
 
-    if not actualizados:
-        print("Nada que compilar.")
-        return not avisos_sync
+    if actualizados:
+        project.save()
+        print("Proyecto guardado (para compilar, usa la accion Compilar aparte).")
 
-    project.save()
-
-    try:
-        application = project.active_application
-    except Exception:
-        application = None
-
-    if application is None:
-        print("ERROR: el proyecto no tiene una aplicacion activa (Application) definida")
-        return False
-
-    print("")
-    print("Compilando aplicacion activa...")
-    application.build()
-
-    # No hay una categoria de mensajes "de compilacion" fija y documentada:
-    # se recorren todas las categorias activas (con al menos un mensaje
-    # desde que arranco esta instancia de CODESYS) en vez de adivinar un guid.
-    errores = []
-    avisos_build = []
-    for categoria in system.get_message_categories(True):
-        errores.extend(system.get_message_objects(categoria, Severity.Error | Severity.FatalError))
-        avisos_build.extend(system.get_message_objects(categoria, Severity.Warning))
-
-    for m in avisos_build:
-        print("[WARNING] " + _pou_paths.formatear_mensaje(m))
-    for m in errores:
-        print("[ERROR] " + _pou_paths.formatear_mensaje(m))
-
-    print("")
-    print("Resumen: %d error(es), %d warning(s)" % (len(errores), len(avisos_build)))
-
-    return len(errores) == 0 and not avisos_sync
+    return not avisos_sync
 
 
 print("Abriendo proyecto: " + project_path)

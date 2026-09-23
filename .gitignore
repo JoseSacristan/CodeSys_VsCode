@@ -1,7 +1,11 @@
 # Codigo ST exportado de proyectos CODESYS reales: no va en el repo publico
 # de la herramienta (cada quien tiene el suyo, en la carpeta que configure
-# en codesys.srcDir).
+# en srcDir de rutas_codesys.json).
 plc_src/
+
+# Ultimo proyecto y carpeta de .st elegidos: son de cada maquina/usuario.
+# La GUI lo crea sola la primera vez que eliges un proyecto o carpeta.
+rutas_codesys.json
 
 # Python
 __pycache__/

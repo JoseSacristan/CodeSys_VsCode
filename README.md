@@ -64,12 +64,13 @@ scripts/
   compilar_proyecto.py       -> abre un .project, compila la aplicacion activa y
                                  reporta errores/warnings (exit code 0/1)
   sincronizar_codesys.py     -> importa POUs de CODESYS a la carpeta destino,
-                                 o sube esa carpeta al proyecto + guarda + compila
-                                 (segun la variable CODESYS_ACCION)
+                                 o sube esa carpeta al proyecto + guarda, sin
+                                 compilar (segun la variable CODESYS_ACCION)
   _pou_paths.py              -> helpers compartidos usados por sincronizar_codesys.py
+rutas_codesys.json          -> ultimo proyecto y carpeta de .st elegidos (lo
+                                crea la GUI; no se versiona)
 .vscode/
-  settings.json           -> ruta al exe/perfil de CODESYS, al .project actual
-                             y a la carpeta de archivos .st
+  settings.json           -> ruta al exe/perfil de CODESYS
   tasks.json              -> tareas para ejecutar scripts desde VSCode
   run-codesys-script.ps1  -> wrapper que arma el command line hacia CODESYS
 ```
@@ -94,30 +95,34 @@ que CODESYS necesita y lo lanza con `Start-Process`.
 
 ## Configurar el proyecto con el que trabajas
 
-Antes de usar las tareas de compilar/exportar/sincronizar, pon la ruta a tu
-`.project` una sola vez en `.vscode/settings.json` (o eligela desde la GUI,
-que guarda ahi mismo):
+El proyecto (`.project` o `.library`) y la carpeta de `.st` con los que
+trabajas se guardan en `rutas_codesys.json`, en la raiz de este repo (a la
+vista, no dentro de `.vscode/`, que es una carpeta oculta). Lo normal es
+elegirlos desde la GUI con los botones **Buscar...**, que crean y actualizan
+ese archivo; tambien se puede editar a mano:
 
 ```json
-"codesys.projectPath": "C:\\Proyectos\\MiMaquina.project"
+{
+    "projectPath": "C:\\Proyectos\\MiMaquina.project",
+    "srcDir": "C:\\Proyectos\\MiMaquina\\st"
+}
 ```
 
-Por defecto los `.st` se guardan en `plc_src/` dentro de este repo. Si
-preferis otra carpeta (por ejemplo, una que ya tengas versionada aparte, o
-una compartida entre varias maquinas), poné la ruta en `codesys.srcDir`:
+Por defecto (`srcDir` vacio o ausente) los `.st` se guardan en `plc_src/`
+dentro de este repo; poné otra carpeta si preferis una que ya tengas
+versionada aparte, o una compartida entre varias maquinas.
 
-```json
-"codesys.srcDir": "C:\\Proyectos\\MiMaquina\\st"
-```
-
-Vacio (el valor por defecto) usa `plc_src/` junto a este repo.
+Las tareas de VSCode leen ese mismo archivo: como `${config:...}` solo
+puede leer `settings.json`, es `run-codesys-script.ps1` quien lo lee y pasa
+las rutas a CODESYS (`CODESYS_PROJECT_PATH` / `CODESYS_SRC_DIR`). El archivo
+esta en `.gitignore` porque las rutas son de cada maquina.
 
 ## Editar codigo ST en VSCode y sincronizarlo con CODESYS
 
 Flujo de trabajo pensado para editar logica existente sin abrir la IDE de
 CODESYS todo el rato. Se puede manejar desde la interfaz grafica
-(`gui_codesys.py`) o desde las tareas de VSCode — ambas llaman al mismo
-script (`scripts/sincronizar_codesys.py`).
+(`gui_codesys.py`) o desde las tareas de VSCode — ambas llaman a los mismos
+scripts (`scripts/sincronizar_codesys.py` y `scripts/compilar_proyecto.py`).
 
 1. **Importar una vez**: vuelca todos los POUs del proyecto a `plc_src/*.st`,
    respetando la carpeta en la que estan organizados dentro de CODESYS. Cada
@@ -125,11 +130,18 @@ script (`scripts/sincronizar_codesys.py`).
    codigo ST) separadas por la linea `(*<<<CODESYS_IMPLEMENTATION>>>*)`.
 2. **Editar** los `.st` en VSCode, a mano o pidiendome ayuda directamente
    sobre esos archivos.
-3. **Sincronizar y compilar**: sube el contenido de cada `.st` al POU
-   correspondiente en el proyecto (por nombre y carpeta, no crea POUs
-   nuevos), guarda, compila la aplicacion activa y muestra errores/warnings
-   con archivo/linea aproximados.
-4. Corregir en el `.st`, repetir el paso 3 hasta que compile limpio.
+3. **Sincronizar**: sube el contenido de cada `.st` al POU correspondiente
+   en el proyecto (por nombre y carpeta, no crea POUs nuevos) y guarda. No
+   compila.
+4. **Compilar**: compila la aplicacion activa y muestra errores/warnings con
+   archivo/linea aproximados.
+5. Corregir en el `.st`, repetir los pasos 3 y 4 hasta que compile limpio.
+
+Sincronizar y compilar son acciones separadas para poder trabajar tambien
+con librerias (`.library`): se importan y sincronizan igual que un
+`.project`, pero no tienen aplicacion activa, asi que "Compilar" sobre una
+libreria termina con "el proyecto no tiene una aplicacion activa". El coste
+es que en un `.project` son dos arranques de CODESYS en vez de uno.
 
 **Limitacion actual:** el sync solo actualiza POUs que ya existen en el
 proyecto. Si creas un `.st` nuevo en `plc_src/` sin que exista ese POU en
@@ -174,18 +186,20 @@ Python normal de la VM en vez de mandarlo a CODESYS, asi el atajo funciona
 igual sin importar que archivo tengas abierto.
 
 Ventana con:
-- Un campo con la ruta al `.project` actual y un boton **Buscar...** (abre un
-  selector de archivos, filtrado a `*.project`). La ruta elegida se guarda
-  automaticamente en `codesys.projectPath` dentro de `.vscode/settings.json`,
-  asi que queda sincronizada con las tareas de VSCode.
+- Un campo con la ruta al `.project`/`.library` actual y un boton
+  **Buscar...** (abre un selector de archivos, filtrado a `*.project` y
+  `*.library`). La ruta elegida se guarda
+  automaticamente en `rutas_codesys.json`, asi que queda sincronizada con
+  las tareas de VSCode.
 - Un campo con la carpeta donde se guardan/leen los `.st` (por defecto
   `plc_src/` de este repo) y su propio boton **Buscar...** (selector de
   carpetas). Igual que el proyecto, la carpeta elegida se guarda en
-  `codesys.srcDir` dentro de `.vscode/settings.json`.
-- Boton **Importar POUs** y boton **Sincronizar y compilar**, que llaman a
+  `rutas_codesys.json`.
+- Botones **Importar POUs** y **Sincronizar**, que llaman a
   `scripts/sincronizar_codesys.py` con `CODESYS_ACCION=importar` o
-  `CODESYS_ACCION=sincronizar` respectivamente, exactamente igual que las
-  tareas de VSCode (mismo wrapper `run-codesys-script.ps1`).
+  `CODESYS_ACCION=sincronizar` respectivamente, y boton **Compilar**, que
+  llama a `scripts/compilar_proyecto.py`; exactamente igual que las tareas
+  de VSCode (mismo wrapper `run-codesys-script.ps1`).
 - Un panel de texto donde se ve la salida de CODESYS en vivo, linea por
   linea, mientras corre en segundo plano (los botones se deshabilitan
   mientras hay una accion en curso para evitar lanzar dos CODESYS a la vez).
@@ -204,10 +218,8 @@ fuera, igual que hacen las tareas de VSCode.
   `system.write_message()`) aparece en el panel de terminal de VSCode.
 - **CODESYS: Ejecutar script actual (con interfaz)**: igual, pero mostrando
   la IDE de CODESYS (util para depurar visualmente un script).
-- **CODESYS: Compilar proyecto**: solo compila, sin tocar `plc_src/` (util
-  si editaste algo directamente en la IDE de CODESYS).
-- **CODESYS: Importar POUs** / **CODESYS: Sincronizar y compilar**: lo mismo
-  que los botones de la GUI, para quien prefiera quedarse en VSCode
+- **CODESYS: Importar POUs** / **CODESYS: Sincronizar** / **CODESYS:
+  Compilar proyecto**: lo mismo que los botones de la GUI, para quien prefiera quedarse en VSCode
   (`Ctrl+Shift+P` -> "Tasks: Run Task").
 
 ## Escribir scripts nuevos
@@ -277,9 +289,9 @@ solo teoria sacada de internet o del CHM:
   editar el `.st` a mano -> `sincronizar`), confirmando que el cambio llega
   al proyecto real.
 - `gui_codesys.py`: se lanzo la ventana de verdad (arranca y responde, sin
-  errores), se probaron `leer_config()`/`guardar_valor()` contra el
-  `settings.json` real (preserva los comentarios, no rompe el resto de
-  claves, incluyendo `codesys.srcDir`) y se probo la misma cadena de
+  errores), se probaron `leer_config()`/`guardar_ruta()` (lee el exe/perfil
+  de `settings.json` con sus comentarios y las rutas de
+  `rutas_codesys.json`) y se probo la misma cadena de
   `subprocess.Popen` -> PowerShell -> `run-codesys-script.ps1` ->
   CODESYS.exe que usan los botones, incluyendo que la ruta al perfil (con
   espacios) llega bien y que la salida se recibe en vivo linea por linea.
@@ -296,7 +308,8 @@ solo teoria sacada de internet o del CHM:
   ambas partes a la vez). Ahora basta con tener alguna de las dos, y la
   parte faltante se marca explicitamente con `SIN_TEXTO` en vez de omitirse.
 
-- **"Sincronizar y compilar" se probo contra el mismo proyecto real**, con
+- **"Sincronizar y compilar" (cuando aun era una sola accion) se probo
+  contra el mismo proyecto real**, con
   `application.build()` de verdad contra la aplicacion del proyecto. Encontro
   y corrigio dos bugs mas:
   - `SV_POU` **no** es el guid de categoria de mensajes de compilacion (esa
@@ -310,6 +323,10 @@ solo teoria sacada de internet o del CHM:
     directo rompia con `TypeError`. Ahora hay un helper
     (`_pou_paths.formatear_mensaje`) que lo maneja.
   
+  - Los `.st` se escriben/leen en UTF-8 explicito (`io.open`): el `open()`
+    de IronPython 2.7 usa ASCII y rompia con `UnicodeEncodeError` al importar
+    una libreria (`WaGenLib.library`) con un `≠` en los comentarios.
+
   Con estas correcciones, una compilacion real con 0 errores y 1 warning
   (un GVL no exportado) se reporto correctamente, coincidiendo con lo que
   CODESYS imprime por su cuenta en modo `--noUI`. Sigue sin
