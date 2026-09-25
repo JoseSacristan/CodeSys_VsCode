@@ -54,6 +54,7 @@ otra sintaxis exclusiva de Python 3.
 ## Estructura del proyecto
 
 ```
+SESIONES.md                 -> resumen breve de lo avanzado en cada sesion
 gui_codesys.py              -> interfaz grafica (Tkinter) para elegir el
                                 proyecto e importar/sincronizar con un click
 plc_src/                    -> carpeta por defecto para el codigo ST de los
@@ -177,6 +178,11 @@ por archivo:
 | Su POU se borro en CODESYS pero lo cambiaste | Lo deja y avisa |
 | No estaba en la ultima importacion (lo creaste tu) | Lo deja y avisa |
 
+Los archivos que no son `.st` (notas `.md`, scripts de prueba, etc.) se
+pueden tener en la misma carpeta: ni importar ni sincronizar los tocan, no
+aparecen en el dialogo de sincronizar y nunca se borran. Una carpeta que
+tenga alguno tampoco se borra aunque se quede sin `.st`.
+
 Si hubo avisos, termina con codigo de salida 1. En un conflicto, para
 quedarte con la version de CODESYS borra el `.st` (o descarta el cambio en
 git) y vuelve a importar; para quedarte con la tuya, sincronizalo.
@@ -209,16 +215,17 @@ toca esa parte.
 
 Lo mas comodo: el acceso directo **PyCodesys** del escritorio. Apunta a
 `pyw.exe` (el lanzador de Python sin ventana de consola) con
-`C:\Fuentes\PyCodesys\gui_codesys.py` como argumento y el icono de
-CODESYS. Si se mueve el repo o se pierde el acceso directo, se recrea asi
-(PowerShell):
+`gui_codesys.py` de este repo como argumento y el icono de CODESYS. Se
+crea asi (PowerShell), y se repite si se mueve el repo o se pierde el
+acceso directo:
 
 ```powershell
+$repo = "C:\ruta\a\PyCodesys"   # carpeta donde esta este repo
 $ws = New-Object -ComObject WScript.Shell
 $lnk = $ws.CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\PyCodesys.lnk")
 $lnk.TargetPath = (Get-Command pyw).Source
-$lnk.Arguments = '"C:\Fuentes\PyCodesys\gui_codesys.py"'
-$lnk.WorkingDirectory = "C:\Fuentes\PyCodesys"
+$lnk.Arguments = "`"$repo\gui_codesys.py`""
+$lnk.WorkingDirectory = $repo
 $lnk.IconLocation = "C:\Program Files\CODESYS 3.5.14.10\CODESYS\Common\CODESYS.exe,0"
 $lnk.Save()
 ```
@@ -404,7 +411,7 @@ solo teoria sacada de internet o del CHM:
   
   - Los `.st` se escriben/leen en UTF-8 explicito (`io.open`): el `open()`
     de IronPython 2.7 usa ASCII y rompia con `UnicodeEncodeError` al importar
-    una libreria (`WaGenLib.library`) con un `≠` en los comentarios.
+    una libreria real con un `≠` en los comentarios.
 
   Con estas correcciones, una compilacion real con 0 errores y 1 warning
   (un GVL no exportado) se reporto correctamente, coincidiendo con lo que
@@ -414,7 +421,7 @@ solo teoria sacada de internet o del CHM:
   salida real.
 
 - **Sincronizacion selectiva** (dialogo de casillas + registro de
-  cambios), probada contra una *copia* de `WaGenLib.library` (131 POUs):
+  cambios), probada contra una *copia* de una libreria real (131 POUs):
   - Se comprobo antes que el IronPython de CODESYS tiene `json` y
     `hashlib`, y que el MD5 de un mismo archivo coincide con el de Python 3
     (el registro lo escribe uno y lo lee el otro).
@@ -430,7 +437,7 @@ solo teoria sacada de internet o del CHM:
     al terminar) lanzado con `pyw.exe`, como desde el acceso directo.
 
 - **Importar sin perder trabajo local**, probado contra otra copia de
-  `WaGenLib.library`: con un script se borraron 3 POUs en CODESYS (uno con
+  esa misma libreria: con un script se borraron 3 POUs en CODESYS (uno con
   un metodo dentro) y se cambiaron 2; en disco se editaron 3 `.st` y se creo
   uno sin POU. La reimportacion hizo exactamente lo de la tabla: sobrescribio
   el cambiado solo en CODESYS, borro los 2 huerfanos sin tocar (y la carpeta

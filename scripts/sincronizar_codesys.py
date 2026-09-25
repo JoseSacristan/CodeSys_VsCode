@@ -17,6 +17,10 @@
 # .st y con / como separador. Lo genera la GUI con los archivos marcados en
 # su dialogo; sin esa variable (tareas de VSCode) se suben todos.
 #
+# Solo se leen, escriben o borran archivos .st: cualquier otro archivo de la
+# carpeta (notas .md, scripts de prueba...) no se sube al proyecto ni se
+# borra nunca, y una carpeta que conserve alguno no cuenta como vacia.
+#
 # Tanto al importar como al sincronizar se anota el hash de cada .st que
 # quedo al dia con el proyecto (scripts/_estado_sync.py), para que la GUI
 # sepa cuales cambiaron despues y para que importar sepa cuales puede
