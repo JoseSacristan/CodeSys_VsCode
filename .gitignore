@@ -7,6 +7,10 @@ plc_src/
 # La GUI lo crea sola la primera vez que eliges un proyecto o carpeta.
 rutas_codesys.json
 
+# Registro de que .st estan al dia con cada proyecto (scripts/_estado_sync.py):
+# depende de las carpetas de cada maquina, se regenera al importar/sincronizar.
+estado_sincronizacion.json
+
 # Python
 __pycache__/
 *.pyc

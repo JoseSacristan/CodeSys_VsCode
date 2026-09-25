@@ -67,8 +67,13 @@ scripts/
                                  o sube esa carpeta al proyecto + guarda, sin
                                  compilar (segun la variable CODESYS_ACCION)
   _pou_paths.py              -> helpers compartidos usados por sincronizar_codesys.py
+  _estado_sync.py            -> registro de que .st estan al dia con el
+                                 proyecto (lo usan el script y la GUI)
 rutas_codesys.json          -> ultimo proyecto y carpeta de .st elegidos (lo
                                 crea la GUI; no se versiona)
+estado_sincronizacion.json  -> hash de cada .st tal como quedo en la ultima
+                                importacion/sincronizacion, por carpeta (lo
+                                crea sincronizar_codesys.py; no se versiona)
 .vscode/
   settings.json           -> ruta al exe/perfil de CODESYS
   tasks.json              -> tareas para ejecutar scripts desde VSCode
@@ -124,15 +129,18 @@ CODESYS todo el rato. Se puede manejar desde la interfaz grafica
 (`gui_codesys.py`) o desde las tareas de VSCode — ambas llaman a los mismos
 scripts (`scripts/sincronizar_codesys.py` y `scripts/compilar_proyecto.py`).
 
-1. **Importar una vez**: vuelca todos los POUs del proyecto a `plc_src/*.st`,
+1. **Importar**: vuelca todos los POUs del proyecto a `plc_src/*.st`,
    respetando la carpeta en la que estan organizados dentro de CODESYS. Cada
    archivo trae la declaracion (VAR...END_VAR) y la implementacion (el
    codigo ST) separadas por la linea `(*<<<CODESYS_IMPLEMENTATION>>>*)`.
+   Se puede repetir cuando cambie algo en CODESYS: no pisa ni borra `.st`
+   con cambios tuyos (ver "Importar sin perder trabajo local").
 2. **Editar** los `.st` en VSCode, a mano o pidiendome ayuda directamente
    sobre esos archivos.
 3. **Sincronizar**: sube el contenido de cada `.st` al POU correspondiente
    en el proyecto (por nombre y carpeta, no crea POUs nuevos) y guarda. No
-   compila.
+   compila. Desde la GUI primero se eligen en un dialogo los archivos a
+   subir (ver abajo); la tarea de VSCode sube todos.
 4. **Compilar**: compila la aplicacion activa y muestra errores/warnings con
    archivo/linea aproximados.
 5. Corregir en el `.st`, repetir los pasos 3 y 4 hasta que compile limpio.
@@ -146,9 +154,38 @@ es que en un `.project` son dos arranques de CODESYS en vez de uno.
 **Limitacion actual:** el sync solo actualiza POUs que ya existen en el
 proyecto. Si creas un `.st` nuevo en `plc_src/` sin que exista ese POU en
 CODESYS, el script lo avisa y lo salta en vez de crearlo — hay que crear el
-POU una vez desde la IDE de CODESYS (tipo, nombre, lenguaje ST) y despues
-volver a "Importar POUs" para que aparezca el archivo y ya se pueda
-sincronizar en ambas direcciones.
+POU una vez desde la IDE de CODESYS (tipo, nombre, lenguaje ST, en la
+carpeta que corresponda) y despues sincronizar el `.st`. Importar antes no
+pisa tu `.st` (el POU recien creado esta vacio y tu archivo no estaba en la
+ultima importacion: avisa y lo deja).
+
+### Importar sin perder trabajo local
+
+Importar usa el mismo registro de hashes que el dialogo de sincronizar
+(`estado_sincronizacion.json`) para saber que `.st` siguen tal cual
+salieron de la ultima importacion/sincronizacion, y con eso decide archivo
+por archivo:
+
+| Situacion del `.st` | Que hace importar |
+|---|---|
+| Igual que en CODESYS | Nada (ni lo reescribe, asi conserva su fecha) |
+| El POU es nuevo en CODESYS | Lo crea |
+| Cambio en CODESYS y no lo tocaste | Lo sobrescribe con la version de CODESYS |
+| Lo cambiaste tu y CODESYS sigue igual | Lo deja: cambios pendientes de sincronizar |
+| Cambio en CODESYS **y** lo cambiaste tu | Lo deja y avisa (conflicto) |
+| Su POU se borro en CODESYS y no lo tocaste | Lo borra (y las carpetas que queden vacias) |
+| Su POU se borro en CODESYS pero lo cambiaste | Lo deja y avisa |
+| No estaba en la ultima importacion (lo creaste tu) | Lo deja y avisa |
+
+Si hubo avisos, termina con codigo de salida 1. En un conflicto, para
+quedarte con la version de CODESYS borra el `.st` (o descarta el cambio en
+git) y vuelve a importar; para quedarte con la tuya, sincronizalo.
+
+La primera importacion en una carpeta que ya tiene `.st` pero no tiene
+registro (por ejemplo, una importada con una version anterior de estos
+scripts) no puede saber que tocaste: solo escribe lo que falta o ya es
+identico, y avisa de todo lo distinto o sobrante sin tocarlo. Desde ahi ya
+hay registro.
 
 **Objetos con lenguaje grafico (LD/FBD/CFC) o sin declaracion propia:**
 CODESYS solo expone como texto editable el codigo en ST/IL. Muchos objetos
@@ -169,6 +206,24 @@ grafico — el script lo detecta, avisa en vez de fallar en silencio, y no
 toca esa parte.
 
 ## Interfaz grafica (gui_codesys.py)
+
+Lo mas comodo: el acceso directo **PyCodesys** del escritorio. Apunta a
+`pyw.exe` (el lanzador de Python sin ventana de consola) con
+`C:\Fuentes\PyCodesys\gui_codesys.py` como argumento y el icono de
+CODESYS. Si se mueve el repo o se pierde el acceso directo, se recrea asi
+(PowerShell):
+
+```powershell
+$ws = New-Object -ComObject WScript.Shell
+$lnk = $ws.CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\PyCodesys.lnk")
+$lnk.TargetPath = (Get-Command pyw).Source
+$lnk.Arguments = '"C:\Fuentes\PyCodesys\gui_codesys.py"'
+$lnk.WorkingDirectory = "C:\Fuentes\PyCodesys"
+$lnk.IconLocation = "C:\Program Files\CODESYS 3.5.14.10\CODESYS\Common\CODESYS.exe,0"
+$lnk.Save()
+```
+
+Tambien se puede abrir desde una terminal:
 
 ```
 py gui_codesys.py
@@ -200,6 +255,30 @@ Ventana con:
   `CODESYS_ACCION=sincronizar` respectivamente, y boton **Compilar**, que
   llama a `scripts/compilar_proyecto.py`; exactamente igual que las tareas
   de VSCode (mismo wrapper `run-codesys-script.ps1`).
+- Al pulsar **Sincronizar** se abre antes un dialogo con el arbol de `.st`
+  de la carpeta (mismas carpetas que en CODESYS) y una casilla por archivo
+  y por carpeta, para elegir que subir:
+  - Vienen marcados solo los que cambiaron desde la ultima importacion o
+    sincronizacion, en naranja y con su estado: *modificado* (su contenido
+    ya no es el que se importo/subio) o *nuevo* (no estaba en la ultima
+    importacion; si el POU no existe en CODESYS se avisara y se saltara).
+    Las carpetas que los contienen se abren solas.
+  - Click en un archivo lo marca/desmarca (tambien con la barra
+    espaciadora); click en una carpeta marca o desmarca todo lo que tiene
+    dentro. Botones **Marcar todos**, **Desmarcar todos** y **Solo los
+    cambiados**.
+  - Si no hay registro previo de esa carpeta (primera vez), van todos
+    marcados; desde esa sincronizacion ya se marcan solo los cambiados.
+
+  La deteccion de cambios usa `estado_sincronizacion.json`:
+  `sincronizar_codesys.py` guarda ahi el hash MD5 de cada `.st` al
+  importar (los que quedan iguales a CODESYS) y al sincronizar (solo los
+  que se subieron sin avisos),
+  y la GUI lo compara con el contenido actual. Se compara contenido, no
+  fecha de modificacion, asi que guardar un archivo sin cambios no lo
+  marca. La lista elegida le llega al script en un `.txt` temporal
+  (variable `CODESYS_LISTA_ARCHIVOS`); sin esa variable, como en la tarea
+  de VSCode, se suben todos.
 - Un panel de texto donde se ve la salida de CODESYS en vivo, linea por
   linea, mientras corre en segundo plano (los botones se deshabilitan
   mientras hay una accion en curso para evitar lanzar dos CODESYS a la vez).
@@ -333,3 +412,31 @@ solo teoria sacada de internet o del CHM:
   probarse el caso con un **error** de verdad (solo warning), asi que si el
   formato de un mensaje de error se ve raro, es facil de ajustar viendo la
   salida real.
+
+- **Sincronizacion selectiva** (dialogo de casillas + registro de
+  cambios), probada contra una *copia* de `WaGenLib.library` (131 POUs):
+  - Se comprobo antes que el IronPython de CODESYS tiene `json` y
+    `hashlib`, y que el MD5 de un mismo archivo coincide con el de Python 3
+    (el registro lo escribe uno y lo lee el otro).
+  - Importar -> editar 2 `.st` y crear 1 nuevo -> el dialogo marco
+    exactamente esos 3. Se probaron los clicks en archivo, en carpeta, en
+    la flechita de desplegar (no marca) y la barra espaciadora.
+  - Sincronizar eligiendo solo uno de los modificados, el nuevo (sin POU
+    en el proyecto) y uno inexistente: subio solo el elegido, aviso de los
+    otros dos, y al reimportar la copia en otra carpeta el cambio estaba
+    en la libreria y el otro modificado no. Despues, el dialogo seguia
+    marcando el modificado no subido y el nuevo, y ya no el subido.
+  - El camino completo del boton (lista en `.txt` temporal, que se borra
+    al terminar) lanzado con `pyw.exe`, como desde el acceso directo.
+
+- **Importar sin perder trabajo local**, probado contra otra copia de
+  `WaGenLib.library`: con un script se borraron 3 POUs en CODESYS (uno con
+  un metodo dentro) y se cambiaron 2; en disco se editaron 3 `.st` y se creo
+  uno sin POU. La reimportacion hizo exactamente lo de la tabla: sobrescribio
+  el cambiado solo en CODESYS, borro los 2 huerfanos sin tocar (y la carpeta
+  del metodo, que quedo vacia), conservo el editado solo en disco sin avisar,
+  y aviso sin tocar nada del conflicto, del huerfano editado y del creado a
+  mano. El dialogo de sincronizar marcaba despues justo esos 4. Tambien se
+  probo la primera importacion sobre una carpeta sin registro (no toco nada
+  distinto) y que los bytes que escribe son identicos a los de la version
+  anterior (incluidos caracteres no ASCII como el "distinto de").

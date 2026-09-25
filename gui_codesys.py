@@ -8,7 +8,9 @@
 #   - Importar POUs: trae el codigo de los POUs del proyecto a la carpeta
 #     destino elegida (por defecto plc_src/*.st)
 #   - Sincronizar: sube esos .st al proyecto y lo guarda (sin compilar, asi
-#     sirve tambien para librerias .library)
+#     sirve tambien para librerias .library). Antes muestra un dialogo con
+#     casillas para elegir que archivos subir, con los que cambiaron desde
+#     la ultima importacion/sincronizacion ya marcados.
 #   - Compilar: compila la aplicacion activa y reporta errores/warnings
 #
 # Uso: py gui_codesys.py
@@ -25,11 +27,19 @@ import os
 import queue
 import re
 import subprocess
+import sys
+import tempfile
 import threading
+import time
 import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext
+from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Registro compartido con scripts/sincronizar_codesys.py (que corre en el
+# IronPython de CODESYS) de que .st estan al dia con el proyecto
+sys.path.insert(0, os.path.join(BASE_DIR, "scripts"))
+import _estado_sync  # noqa: E402
 SETTINGS_PATH = os.path.join(BASE_DIR, ".vscode", "settings.json")
 # Ultimo proyecto y carpeta de .st elegidos. Van en un archivo visible en la
 # raiz del repo, no en .vscode/ (carpeta oculta). Tambien lo lee
@@ -88,6 +98,240 @@ def guardar_ruta(clave, nuevo_valor):
     with open(RUTAS_PATH, "w", encoding="utf-8") as f:
         json.dump(rutas, f, indent=4, ensure_ascii=False)
         f.write("\n")
+
+
+def listar_st(src_dir):
+    """Rutas relativas (con /) de todos los .st bajo src_dir, ordenadas como
+    un arbol: en cada nivel primero las carpetas y luego los archivos."""
+    rutas = []
+    for carpeta_actual, subcarpetas, archivos in os.walk(src_dir):
+        # .git y similares: nunca tienen .st y pueden ser enormes
+        subcarpetas[:] = [s for s in subcarpetas if not s.startswith(".")]
+        for nombre in archivos:
+            if nombre.endswith(".st"):
+                rutas.append(_estado_sync.ruta_relativa(os.path.join(carpeta_actual, nombre), src_dir))
+
+    def orden(ruta):
+        partes = ruta.lower().split("/")
+        return [(0, p) for p in partes[:-1]] + [(1, partes[-1])]
+
+    return sorted(rutas, key=orden)
+
+
+def _imagen_casilla(maestro, estado):
+    """Casilla de 13x13 px dibujada a mano ("marcado", "vacio" o "parcial"):
+    ttk.Treeview no trae checkboxes, y los caracteres Unicode de casilla
+    dependen de la fuente."""
+    tam = 13
+    img = tk.PhotoImage(master=maestro, width=tam, height=tam)
+    img.put("#ffffff", to=(0, 0, tam, tam))
+    for i in range(tam):
+        for x, y in ((i, 0), (i, tam - 1), (0, i), (tam - 1, i)):
+            img.put("#555555", to=(x, y, x + 1, y + 1))
+    if estado == "marcado":
+        for x, y in ((3, 5), (4, 6), (5, 7), (6, 6), (7, 5), (8, 4), (9, 3)):
+            img.put("#1f5fbf", to=(x, y, x + 1, y + 2))
+    elif estado == "parcial":
+        img.put("#1f5fbf", to=(3, 3, tam - 3, tam - 3))
+    return img
+
+
+class DialogoSeleccion(tk.Toplevel):
+    """Ventana modal con el arbol de .st de la carpeta y una casilla por
+    archivo y por carpeta, para elegir cuales sincronizar. Vienen marcados
+    los que cambiaron desde la ultima importacion/sincronizacion (o todos, si
+    no hay registro de esa carpeta). Al cerrarse deja en self.resultado la
+    lista de rutas relativas elegidas, o None si se cancelo."""
+
+    def __init__(self, padre, src_dir, rutas):
+        tk.Toplevel.__init__(self, padre)
+        self.title("Sincronizar - elige los archivos")
+        self.transient(padre)
+        self.geometry("700x520+%d+%d" % (padre.winfo_rootx() + 40, padre.winfo_rooty() + 20))
+        self.minsize(480, 320)
+
+        self.resultado = None
+        self.imagenes = dict((e, _imagen_casilla(self, e)) for e in ("marcado", "vacio", "parcial"))
+        self.marcado = {}      # item de archivo -> bool (las carpetas se calculan)
+        self.ruta_de = {}      # item de archivo -> ruta relativa
+        self.cambiados = set() # items de archivo modificados o nuevos
+
+        self._construir_ui(src_dir)
+        registro = _estado_sync.leer(src_dir)
+        self._cargar(src_dir, rutas, registro)
+        self._explicar(registro)
+        self._refrescar()
+
+        self.protocol("WM_DELETE_WINDOW", self._cancelar)
+        self.bind("<Escape>", lambda e: self._cancelar())
+        self.bind("<Return>", lambda e: self._aceptar())
+        self.grab_set()
+        self.arbol.focus_set()
+        self.wait_window()
+
+    def _construir_ui(self, src_dir):
+        tk.Label(self, text="Carpeta: " + src_dir, anchor="w").pack(fill="x", padx=10, pady=(10, 0))
+        self.etiqueta_info = tk.Label(self, anchor="w", justify="left", fg="#555555")
+        self.etiqueta_info.pack(fill="x", padx=10, pady=(2, 6))
+        self.etiqueta_info.bind("<Configure>", lambda e: self.etiqueta_info.configure(wraplength=e.width))
+
+        marco_arbol = tk.Frame(self)
+        marco_arbol.pack(fill="both", expand=True, padx=10)
+        self.arbol = ttk.Treeview(marco_arbol, columns=("estado", "fecha"), selectmode="browse")
+        self.arbol.heading("#0", text="Archivo", anchor="w")
+        self.arbol.heading("estado", text="Estado", anchor="w")
+        self.arbol.heading("fecha", text="Modificado", anchor="w")
+        self.arbol.column("#0", width=400, stretch=True)
+        self.arbol.column("estado", width=90, stretch=False)
+        self.arbol.column("fecha", width=120, stretch=False)
+        self.arbol.tag_configure("cambiado", foreground="#b35900")
+        barra = ttk.Scrollbar(marco_arbol, orient="vertical", command=self.arbol.yview)
+        self.arbol.configure(yscrollcommand=barra.set)
+        barra.pack(side="right", fill="y")
+        self.arbol.pack(side="left", fill="both", expand=True)
+        self.arbol.bind("<Button-1>", self._al_hacer_click)
+        self.arbol.bind("<space>", self._al_pulsar_espacio)
+
+        marco_botones = tk.Frame(self, padx=10, pady=10)
+        marco_botones.pack(fill="x")
+        tk.Button(marco_botones, text="Marcar todos",
+                  command=lambda: self._marcar(lambda item: True)).pack(side="left")
+        tk.Button(marco_botones, text="Desmarcar todos",
+                  command=lambda: self._marcar(lambda item: False)).pack(side="left", padx=6)
+        self.boton_cambiados = tk.Button(marco_botones, text="Solo los cambiados",
+                                         command=lambda: self._marcar(lambda item: item in self.cambiados))
+        self.boton_cambiados.pack(side="left")
+
+        tk.Button(marco_botones, text="Cancelar", width=10, command=self._cancelar).pack(side="right")
+        self.boton_aceptar = tk.Button(marco_botones, text="Sincronizar", width=12, command=self._aceptar)
+        self.boton_aceptar.pack(side="right", padx=6)
+        self.etiqueta_contador = tk.Label(marco_botones)
+        self.etiqueta_contador.pack(side="right", padx=6)
+
+    def _cargar(self, src_dir, rutas, registro):
+        carpetas = {(): ""}  # segmentos de la carpeta -> item del arbol
+        for ruta in rutas:
+            partes = tuple(ruta.split("/"))
+            for i in range(1, len(partes)):
+                if partes[:i] not in carpetas:
+                    carpetas[partes[:i]] = self.arbol.insert(carpetas[partes[:i - 1]], "end", text=" " + partes[i - 1])
+
+            ruta_abs = os.path.join(src_dir, *partes)
+            if registro is None:
+                estado = ""
+            elif ruta.lower() not in registro:
+                estado = "nuevo"
+            elif registro[ruta.lower()] != _estado_sync.hash_archivo(ruta_abs):
+                estado = "modificado"
+            else:
+                estado = ""
+            fecha = time.strftime("%d/%m/%Y %H:%M", time.localtime(os.path.getmtime(ruta_abs)))
+
+            padre = carpetas[partes[:-1]]
+            item = self.arbol.insert(padre, "end", text=" " + partes[-1], values=(estado, fecha),
+                                     tags=("cambiado",) if estado else ())
+            self.ruta_de[item] = ruta
+            self.marcado[item] = registro is None or bool(estado)
+            if estado:
+                self.cambiados.add(item)
+                # Desplegar las carpetas donde hay algo cambiado, para verlo
+                # sin tener que buscarlo
+                while padre:
+                    self.arbol.item(padre, open=True)
+                    padre = self.arbol.parent(padre)
+
+    def _explicar(self, registro):
+        if registro is None:
+            texto = ("No hay registro de la ultima importacion/sincronizacion de esta carpeta, asi que "
+                     "van todos marcados. Desde esta sincronizacion en adelante se marcaran solo los "
+                     "archivos que cambien.")
+            self.boton_cambiados.configure(state="disabled")
+        elif self.cambiados:
+            texto = ("Marcados los %d archivo(s) que cambiaron desde la ultima importacion/sincronizacion "
+                     "(\"nuevo\" = no estaba en esa importacion; si el POU no existe en CODESYS, "
+                     "se avisara y se saltara)." % len(self.cambiados))
+        else:
+            texto = "Ningun archivo cambio desde la ultima importacion/sincronizacion."
+            self.boton_cambiados.configure(state="disabled")
+        self.etiqueta_info.configure(text=texto)
+
+    def _archivos_bajo(self, item):
+        if item in self.marcado:
+            return [item]
+        archivos = []
+        for hijo in self.arbol.get_children(item):
+            archivos.extend(self._archivos_bajo(hijo))
+        return archivos
+
+    def _pintar(self, item):
+        """Pone la casilla de item (y de todo lo que cuelga de el) segun lo
+        marcado. Devuelve (archivos marcados, archivos totales) bajo item."""
+        if item in self.marcado:
+            self.arbol.item(item, image=self.imagenes["marcado" if self.marcado[item] else "vacio"])
+            return (1 if self.marcado[item] else 0), 1
+        marcados = total = 0
+        for hijo in self.arbol.get_children(item):
+            m, t = self._pintar(hijo)
+            marcados += m
+            total += t
+        if item:
+            if marcados == 0:
+                estado = "vacio"
+            elif marcados == total:
+                estado = "marcado"
+            else:
+                estado = "parcial"
+            self.arbol.item(item, image=self.imagenes[estado])
+        return marcados, total
+
+    def _refrescar(self):
+        marcados, total = self._pintar("")
+        self.etiqueta_contador.configure(text="%d de %d marcados" % (marcados, total))
+        self.boton_aceptar.configure(state="normal" if marcados else "disabled")
+
+    def _alternar(self, item):
+        """Marca/desmarca un archivo, o todos los de una carpeta (si estaban
+        todos marcados los desmarca; si no, los marca)."""
+        archivos = self._archivos_bajo(item)
+        nuevo = not all(self.marcado[a] for a in archivos)
+        for a in archivos:
+            self.marcado[a] = nuevo
+        self._refrescar()
+
+    def _marcar(self, criterio):
+        for item in self.marcado:
+            self.marcado[item] = criterio(item)
+        self._refrescar()
+
+    def _al_hacer_click(self, evento):
+        if self.arbol.identify_region(evento.x, evento.y) not in ("tree", "cell"):
+            return None
+        if "indicator" in self.arbol.identify_element(evento.x, evento.y):
+            return None  # la flechita de la carpeta: desplegar/plegar normal
+        item = self.arbol.identify_row(evento.y)
+        if not item:
+            return None
+        self.arbol.focus(item)
+        self.arbol.selection_set(item)
+        self._alternar(item)
+        return "break"
+
+    def _al_pulsar_espacio(self, evento):
+        item = self.arbol.focus()
+        if item:
+            self._alternar(item)
+        return "break"
+
+    def _aceptar(self):
+        elegidos = [self.ruta_de[item] for item in self.marcado if self.marcado[item]]
+        if not elegidos:
+            return
+        self.resultado = elegidos
+        self.destroy()
+
+    def _cancelar(self):
+        self.resultado = None
+        self.destroy()
 
 
 class AppCodesys(tk.Tk):
@@ -194,10 +438,27 @@ class AppCodesys(tk.Tk):
 
         ruta_src = self.src_dir.get().strip() or SRC_DIR_POR_DEFECTO
 
+        seleccion = None
+        if accion == "sincronizar":
+            rutas = listar_st(ruta_src) if os.path.isdir(ruta_src) else []
+            if not rutas:
+                messagebox.showwarning(
+                    "PyCodesys",
+                    "No hay archivos .st en:\n" + ruta_src + "\n\nUsa antes 'Importar POUs'.",
+                )
+                return
+            seleccion = DialogoSeleccion(self, ruta_src, rutas).resultado
+            if seleccion is None:
+                return
+
         self._limpiar_log()
         self._log("Accion: " + accion)
         self._log("Proyecto: " + ruta_proyecto)
         self._log("Carpeta .st: " + ruta_src)
+        if seleccion is not None:
+            self._log("Archivos elegidos (%d):" % len(seleccion))
+            for ruta in seleccion:
+                self._log("  - " + ruta)
         self._log("")
 
         self.proceso_corriendo = True
@@ -206,13 +467,15 @@ class AppCodesys(tk.Tk):
 
         hilo = threading.Thread(
             target=self._correr_proceso,
-            args=(accion, ruta_proyecto, ruta_src, config),
+            args=(accion, ruta_proyecto, ruta_src, config, seleccion),
             daemon=True,
         )
         hilo.start()
 
-    def _correr_proceso(self, accion, ruta_proyecto, ruta_src, config):
+    def _correr_proceso(self, accion, ruta_proyecto, ruta_src, config, seleccion):
         env = os.environ.copy()
+        env.pop("CODESYS_LISTA_ARCHIVOS", None)
+        ruta_lista = None
         if accion == "compilar":
             script = SCRIPT_COMPILAR
         else:
@@ -231,9 +494,23 @@ class AppCodesys(tk.Tk):
         ]
 
         try:
+            if seleccion is not None:
+                # La lista va en un archivo y no directo en la variable de
+                # entorno: con cientos de POUs podria pasarse del limite de
+                # longitud de una variable de entorno de Windows
+                with tempfile.NamedTemporaryFile("w", encoding="utf-8", prefix="pycodesys_",
+                                                 suffix=".txt", delete=False) as f:
+                    f.write("\n".join(seleccion) + "\n")
+                    ruta_lista = f.name
+                env["CODESYS_LISTA_ARCHIVOS"] = ruta_lista
+
             proceso = subprocess.Popen(
                 comando,
                 env=env,
+                # Sin consola propia cuando se abre con pyw.exe (acceso
+                # directo del escritorio): stdin explicito para no heredar
+                # un handle invalido
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -247,6 +524,12 @@ class AppCodesys(tk.Tk):
         except Exception as e:
             self.cola_salida.put(("linea", "ERROR lanzando CODESYS: " + str(e)))
             codigo = -1
+        finally:
+            if ruta_lista:
+                try:
+                    os.remove(ruta_lista)
+                except OSError:
+                    pass
 
         self.cola_salida.put(("fin", codigo))
 
