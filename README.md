@@ -139,9 +139,10 @@ scripts (`scripts/sincronizar_codesys.py` y `scripts/compilar_proyecto.py`).
 2. **Editar** los `.st` en VSCode, a mano o pidiendome ayuda directamente
    sobre esos archivos.
 3. **Sincronizar**: sube el contenido de cada `.st` al POU correspondiente
-   en el proyecto (por nombre y carpeta, no crea POUs nuevos) y guarda. No
-   compila. Desde la GUI primero se eligen en un dialogo los archivos a
-   subir (ver abajo); la tarea de VSCode sube todos.
+   en el proyecto (por nombre y carpeta) y guarda. Si el `.st` es nuevo, crea
+   el objeto y las carpetas que le falten (ver "Crear objetos nuevos desde un
+   `.st`"). No compila. Desde la GUI primero se eligen en un dialogo los
+   archivos a subir (ver abajo); la tarea de VSCode sube todos.
 4. **Compilar**: compila la aplicacion activa y muestra errores/warnings con
    archivo/linea aproximados.
 5. Corregir en el `.st`, repetir los pasos 3 y 4 hasta que compile limpio.
@@ -152,13 +153,65 @@ con librerias (`.library`): se importan y sincronizan igual que un
 libreria termina con "el proyecto no tiene una aplicacion activa". El coste
 es que en un `.project` son dos arranques de CODESYS en vez de uno.
 
-**Limitacion actual:** el sync solo actualiza POUs que ya existen en el
-proyecto. Si creas un `.st` nuevo en `plc_src/` sin que exista ese POU en
-CODESYS, el script lo avisa y lo salta en vez de crearlo — hay que crear el
-POU una vez desde la IDE de CODESYS (tipo, nombre, lenguaje ST, en la
-carpeta que corresponda) y despues sincronizar el `.st`. Importar antes no
-pisa tu `.st` (el POU recien creado esta vacio y tu archivo no estaba en la
-ultima importacion: avisa y lo deja).
+### Crear objetos nuevos desde un `.st`
+
+Para crear un POU, un DUT, una GVL, etc. basta con crear su `.st` en la
+carpeta que le toca y sincronizarlo. Las carpetas que le falten en el proyecto
+se crean solas; una carpeta de disco sin ningun `.st` no se crea. El objeto
+se llama como el archivo, y su tipo sale de como empieza la declaracion
+(saltando comentarios y pragmas):
+
+| La declaracion empieza por | Se crea | Donde puede ir |
+|---|---|---|
+| `PROGRAM`, `FUNCTION_BLOCK`, `FUNCTION` | POU en ST | Raiz del proyecto, aplicacion o carpeta |
+| `TYPE` | DUT (estructura, enumeracion, union o alias, segun su texto) | Igual |
+| `VAR_GLOBAL` | GVL | Igual |
+| `INTERFACE` | Interfaz | Igual |
+| `METHOD`, `PROPERTY` | Metodo / propiedad | En la carpeta con el nombre de su programa, FB o interfaz |
+| Nada, o `(*<<<CODESYS_SIN_TEXTO_AQUI>>>*)` | Accion | En la carpeta con el nombre de su programa o FB |
+
+El archivo lleva el mismo formato que los importados; por ejemplo
+`Device/Plc Logic/Application/Motores/FB_Motor.st`:
+
+```
+FUNCTION_BLOCK FB_Motor
+VAR_INPUT
+    bMarcha : BOOL;
+END_VAR
+(*<<<CODESYS_IMPLEMENTATION>>>*)
+// codigo ST
+```
+
+Y un metodo suyo en `Device/Plc Logic/Application/Motores/FB_Motor/Arrancar.st`.
+Si el POU y sus metodos son todos nuevos hay que subirlos juntos: si eliges
+el metodo sin el POU, avisa y no crea nada.
+
+La salida lista lo creado ("Objetos creados" y "Carpetas creadas"); despues
+conviene compilar, porque el texto no se valida al crearlo. Lo que no se puede
+crear se avisa y se salta, sin afectar al resto:
+
+- **Solo se crea lo que nunca estuvo en el proyecto**: un `.st` que ya esta en
+  el registro y cuyo objeto falta es que se borro o renombro en CODESYS. Avisa
+  y no lo recrea, asi "sincronizar todo" no deshace ese cambio. Si quieres
+  recrearlo: saca el `.st` de la carpeta, importa, vuelve a ponerlo y sincroniza.
+- **Sin registro de la carpeta** (nunca se importo ni sincronizo) tampoco
+  crea, porque no se distingue lo nuevo de lo borrado: importa antes.
+- La declaracion tiene que decir el mismo nombre que el archivo, y la ruta
+  tiene que caber en el proyecto: si por una errata cuelga de `Plc Logic` o de
+  `Device`, avisa en vez de crear ahi una carpeta. Una errata en una carpeta
+  que si admite subcarpetas (o en el primer nivel) no se puede detectar: crea
+  esa carpeta y aparece en la salida.
+- **Propiedades:** CODESYS crea siempre `Get` y `Set`. Si en la carpeta de la
+  propiedad solo esta `Get.st`, el `Set` se quita (propiedad de solo lectura);
+  si no esta ninguno de los dos, se quedan ambos vacios y aparecen al importar.
+- **Renombrar o mover un `.st` no renombra ni mueve el objeto**: intenta crear
+  otro con la ruta nueva, y el original sigue en el proyecto (y vuelve a
+  aparecer en disco al importar). Mover falla porque CODESYS no admite dos
+  objetos con el mismo nombre en el mismo espacio de nombres. Hazlo en la IDE.
+- **Sigue habiendo que usar la IDE para:** POUs en lenguaje grafico,
+  transiciones de SFC (sin declaracion, un `.st` se crea siempre como accion),
+  miembros dentro de una carpeta que esta dentro de un POU, y `Get`/`Set` de
+  una propiedad que ya existe.
 
 ### Importar sin perder trabajo local
 
@@ -176,7 +229,7 @@ por archivo:
 | Cambio en CODESYS **y** lo cambiaste tu | Lo deja y avisa (conflicto) |
 | Su POU se borro en CODESYS y no lo tocaste | Lo borra (y las carpetas que queden vacias) |
 | Su POU se borro en CODESYS pero lo cambiaste | Lo deja y avisa |
-| No estaba en la ultima importacion (lo creaste tu) | Lo deja y avisa |
+| No estaba en la ultima importacion (lo creaste tu) | Lo deja y avisa (sincronizalo para crearlo) |
 
 Los archivos que no son `.st` (notas `.md`, scripts de prueba, etc.) se
 pueden tener en la misma carpeta: ni importar ni sincronizar los tocan, no
@@ -248,6 +301,11 @@ Python normal de la VM en vez de mandarlo a CODESYS, asi el atajo funciona
 igual sin importar que archivo tengas abierto.
 
 Ventana con:
+- La version en la barra de titulo: es la etiqueta de git del commit actual
+  (`git describe`), asi que no hay un numero que mantener en el codigo. Si
+  hay commits posteriores a la etiqueta sale como `v1.1-3-gabc1234`, con
+  cambios sin commit lleva `-dirty`, y sin git o sin `.git` (descargado en un
+  `.zip`) dice "version desconocida".
 - Un campo con la ruta al `.project`/`.library` actual y un boton
   **Buscar...** (abre un selector de archivos, filtrado a `*.project` y
   `*.library`). La ruta elegida se guarda
@@ -268,8 +326,8 @@ Ventana con:
   - Vienen marcados solo los que cambiaron desde la ultima importacion o
     sincronizacion, en naranja y con su estado: *modificado* (su contenido
     ya no es el que se importo/subio) o *nuevo* (no estaba en la ultima
-    importacion; si el POU no existe en CODESYS se avisara y se saltara).
-    Las carpetas que los contienen se abren solas.
+    importacion; si no existe en CODESYS, se creara junto con las carpetas
+    que le falten). Las carpetas que los contienen se abren solas.
   - Click en un archivo lo marca/desmarca (tambien con la barra
     espaciadora); click en una carpeta marca o desmarca todo lo que tiene
     dentro. Botones **Marcar todos**, **Desmarcar todos** y **Solo los
@@ -415,10 +473,9 @@ solo teoria sacada de internet o del CHM:
 
   Con estas correcciones, una compilacion real con 0 errores y 1 warning
   (un GVL no exportado) se reporto correctamente, coincidiendo con lo que
-  CODESYS imprime por su cuenta en modo `--noUI`. Sigue sin
-  probarse el caso con un **error** de verdad (solo warning), asi que si el
-  formato de un mensaje de error se ve raro, es facil de ajustar viendo la
-  salida real.
+  CODESYS imprime por su cuenta en modo `--noUI`. Un **error** de verdad se
+  vio despues, al probar la creacion de objetos (ver abajo): sale como
+  `[ERROR] Linea N: ...`, sin decir de que objeto es, y termina con codigo 1.
 
 - **Sincronizacion selectiva** (dialogo de casillas + registro de
   cambios), probada contra una *copia* de una libreria real (131 POUs):
@@ -447,3 +504,28 @@ solo teoria sacada de internet o del CHM:
   probo la primera importacion sobre una carpeta sin registro (no toco nada
   distinto) y que los bytes que escribe son identicos a los de la version
   anterior (incluidos caracteres no ASCII como el "distinto de").
+
+- **Crear objetos al sincronizar**, probado contra un proyecto desechable
+  (dispositivo, aplicacion y tarea) y una copia de una libreria real,
+  reabriendo el proyecto desde disco para comprobar cada paso:
+  - Se creo cada tipo de objeto de la tabla, en carpetas nuevas anidadas, con
+    espacios y con acentos, y en la raiz del proyecto. Repetir la
+    sincronizacion no duplico nada, y al reimportar salio el mismo contenido.
+  - `create_folder` no valida nada: en la prueba de la API creo carpetas
+    dentro de `Device`, de `Plc Logic` y de un POU, y duplico una existente, sin
+    dar error. Por eso esas comprobaciones las hace el script. `find` no
+    distingue mayusculas, asi que no hay duplicados por ese lado.
+  - Avisaron sin crear nada: rutas bajo `Device` o `Plc Logic`, nombre distinto
+    al del archivo, tipo no reconocido, metodo sin padre o dentro de una GVL,
+    accion en una funcion o interfaz, y un metodo elegido sin su POU nuevo.
+  - Lo borrado en CODESYS no se recreo al sincronizar todo, y el procedimiento
+    para recrearlo (sacar, importar, volver a poner, sincronizar) funciono.
+  - El `json` del IronPython de CODESYS lanza `UnicodeDecodeError` al escapar
+    un caracter no ASCII: una sola ruta con acento dejaba sin guardar todo el
+    registro. Por eso `_estado_sync.py` usa `ensure_ascii=False`.
+  - A mano, sobre una libreria real, se subieron un FB y dos metodos nuevos, y
+    parece funcionar.
+  - **Sin confirmar:** que lo creado compile con 0 errores. Esa compilacion
+    fallo por un error de la propia prueba (una variable llamada `r`, palabra
+    reservada en IEC) y se interrumpio antes de repetirla. Tampoco se llego a
+    comparar el resto de la libreria tras crear los objetos.

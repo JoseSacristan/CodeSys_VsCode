@@ -3,6 +3,20 @@
 Resumen breve de lo que se avanzo en cada sesion, de la mas reciente a la
 mas antigua. El detalle tecnico esta en `README.md` y en el historial de git.
 
+## 2026-10-30 — v1.1
+
+- **Sincronizar crea lo que falta:** un `.st` nuevo crea su objeto (POU, DUT,
+  GVL, interfaz, metodo, propiedad o accion, segun su declaracion) y las
+  carpetas que le falten. Lo que ya estuvo en el proyecto y se borro o renombro
+  en CODESYS no se recrea.
+- Corregido: una ruta con acento impedia guardar `estado_sincronizacion.json`.
+- Sincronizar ya no recorre carpetas ocultas (`.git`, etc.), igual que la GUI.
+- La GUI muestra la version en la barra de titulo (la etiqueta de git).
+- Probado contra un proyecto desechable y a mano en una libreria real (un FB y
+  dos metodos nuevos), donde parece funcionar. Falta ver compilar lo creado con
+  0 errores: la prueba automatica se interrumpio antes, y una libreria no tiene
+  aplicacion activa que compilar.
+
 ## 2026-09-25 — v1.00
 
 - La herramienta ya se usa en el trabajo diario: se considera madura y pasa
@@ -52,9 +66,7 @@ mas antigua. El detalle tecnico esta en `README.md` y en el historial de git.
 
 ## Pendiente / ideas
 
-- Crear en CODESYS los POUs nuevos a partir de un `.st` (hoy hay que crearlos
-  a mano en la IDE).
-- Probar "Compilar" con un error real de compilacion (solo se ha visto con
-  warnings).
+- Confirmar que lo creado por Sincronizar compila con 0 errores, y anotarlo en
+  las notas de verificacion del README.
 - La tarea de VSCode "Sincronizar" sube siempre todos los `.st`; la
   seleccion solo esta en la GUI.

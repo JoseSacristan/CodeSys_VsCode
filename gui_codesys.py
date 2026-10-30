@@ -100,6 +100,28 @@ def guardar_ruta(clave, nuevo_valor):
         f.write("\n")
 
 
+def leer_version():
+    """Version de la herramienta: la etiqueta de git del commit actual (las
+    versiones son etiquetas como v1.1, no hay un numero en el codigo que mantener).
+    git indica si hay commits posteriores (v1.1-3-gabc1234) o cambios sin
+    guardar (v1.1-dirty). None si no se puede saber: sin git, o sin .git
+    (por ejemplo, descargado en un .zip)."""
+    try:
+        r = subprocess.run(
+            ["git", "describe", "--tags", "--dirty"],
+            cwd=BASE_DIR,
+            # Igual que al lanzar CODESYS: sin consola propia con pyw.exe
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            creationflags=CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
 def listar_st(src_dir):
     """Rutas relativas (con /) de todos los .st bajo src_dir, ordenadas como
     un arbol: en cada nivel primero las carpetas y luego los archivos."""
@@ -248,8 +270,8 @@ class DialogoSeleccion(tk.Toplevel):
             self.boton_cambiados.configure(state="disabled")
         elif self.cambiados:
             texto = ("Marcados los %d archivo(s) que cambiaron desde la ultima importacion/sincronizacion "
-                     "(\"nuevo\" = no estaba en esa importacion; si el POU no existe en CODESYS, "
-                     "se avisara y se saltara)." % len(self.cambiados))
+                     "(\"nuevo\" = no estaba en esa importacion; si no existe en CODESYS, "
+                     "se creara junto con las carpetas que le falten)." % len(self.cambiados))
         else:
             texto = "Ningun archivo cambio desde la ultima importacion/sincronizacion."
             self.boton_cambiados.configure(state="disabled")
@@ -337,7 +359,7 @@ class DialogoSeleccion(tk.Toplevel):
 class AppCodesys(tk.Tk):
     def __init__(self):
         tk.Tk.__init__(self)
-        self.title("PyCodesys - VSCode <-> CODESYS")
+        self.title("PyCodesys %s - VSCode <-> CODESYS" % (leer_version() or "version desconocida"))
         self.geometry("780x500")
         self.minsize(560, 360)
 

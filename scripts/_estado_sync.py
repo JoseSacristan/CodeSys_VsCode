@@ -70,9 +70,10 @@ def actualizar(src_dir, hashes, reemplazar=False):
         todo[clave] = {}
     for ruta, valor in hashes.items():
         todo[clave][ruta.lower()] = valor
-    # ensure_ascii (por defecto): el texto queda en ASCII puro, asi no hay
-    # diferencias de str/unicode entre IronPython y Python 3 al escribirlo.
+    # ensure_ascii=False: en el IronPython de CODESYS, escapar un caracter no
+    # ASCII lanza UnicodeDecodeError (comprobado), y una sola ruta con acento
+    # dejaria sin guardar el registro entero.
     # separators explicito: el de Python 2 deja un espacio al final de cada linea
-    texto = json.dumps(todo, indent=4, sort_keys=True, separators=(",", ": "))
+    texto = json.dumps(todo, indent=4, sort_keys=True, separators=(",", ": "), ensure_ascii=False)
     with io.open(ESTADO_PATH, "w", encoding="utf-8") as f:
         f.write(u"" + texto + u"\n")

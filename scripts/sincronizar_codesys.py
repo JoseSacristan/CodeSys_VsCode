@@ -4,7 +4,12 @@
 # Que hace lo controla la variable de entorno CODESYS_ACCION:
 #   CODESYS_ACCION=importar     -> vuelca los POUs del proyecto a la carpeta destino,
 #                                  sin pisar ni borrar .st con cambios locales
-#   CODESYS_ACCION=sincronizar  -> sube los .st de la carpeta al proyecto y guarda
+#   CODESYS_ACCION=sincronizar  -> sube los .st de la carpeta al proyecto y guarda,
+#                                  creando los objetos y carpetas nuevos
+#
+# Un .st se considera nuevo si no esta en el registro de hashes (ver abajo): si
+# ya estaba y su objeto falta, es que se borro o renombro en CODESYS y no se
+# vuelve a crear. Que objeto crear lo dice el principio de su declaracion.
 #
 # No compila: eso lo hace scripts/compilar_proyecto.py, por separado, para
 # poder sincronizar tambien librerias (.library), que no tienen aplicacion
@@ -40,6 +45,14 @@ import _pou_paths
 import System
 
 ACCIONES_VALIDAS = ("importar", "sincronizar")
+
+# De que objetos puede colgar cada tipo de miembro. No sirve preguntar con
+# hasattr(padre, "create_method"): una GVL tambien dice tenerlo
+PADRES_ADMITIDOS = {
+    "METHOD": ("PROGRAM", "FUNCTION_BLOCK", "INTERFACE"),
+    "PROPERTY": ("PROGRAM", "FUNCTION_BLOCK", "INTERFACE"),
+    "ACTION": ("PROGRAM", "FUNCTION_BLOCK"),
+}
 
 accion = os.environ.get("CODESYS_ACCION", "")
 project_path = os.environ.get("CODESYS_PROJECT_PATH")
@@ -181,7 +194,7 @@ def importar(project):
             hashes[clave] = registro[clave]
             motivo = "tiene cambios sin sincronizar"
         elif hay_registro:
-            motivo = "no estaba en la ultima importacion (si es un POU nuevo, crealo en la IDE de CODESYS)"
+            motivo = "no estaba en la ultima importacion (si es un POU nuevo, sincronizalo para crearlo)"
         else:
             motivo = "no hay registro previo de esta carpeta para saber si tiene cambios tuyos"
         avisos.append(ruta_rel + ": no existe en el proyecto, pero " + motivo + ": NO se borro.")
@@ -229,6 +242,108 @@ def leer_seleccion():
     return dict((linea.lower(), linea) for linea in lineas if linea)
 
 
+def buscar_unico(project, segmentos):
+    """El objeto en esa ruta del proyecto, o None si no existe."""
+    encontrados = project.find(System.Array[str](segmentos))
+    if len(encontrados) > 1:
+        raise ValueError("'%s' es ambiguo: %d coincidencias en el proyecto" % ("/".join(segmentos), len(encontrados)))
+    return encontrados[0] if len(encontrados) == 1 else None
+
+
+def asegurar_carpetas(project, segmentos, carpetas_creadas):
+    """El objeto en esa ruta del proyecto, creando las carpetas que falten.
+    Las comprobaciones son necesarias: create_folder no valida nada, y crea
+    sin error carpetas duplicadas o dentro de un dispositivo o de un POU."""
+    actual = project
+    for i in range(1, len(segmentos) + 1):
+        camino = segmentos[:i]
+        siguiente = buscar_unico(project, camino)
+        if siguiente is None:
+            # Del .st de un POU cuelgan sus metodos, en una carpeta de disco
+            # con su nombre: esa carpeta no es una carpeta del proyecto
+            if os.path.isfile(os.path.join(src_dir, *camino) + ".st"):
+                raise ValueError("cuelga de %s.st, que tampoco esta en el proyecto (eligelo tambien,"
+                                 " o mira por que no se pudo crear)" % "/".join(camino))
+            if not hasattr(actual, "create_pou"):
+                raise ValueError("no se puede crear la carpeta '%s' dentro de '%s'"
+                                 " (revisa que la ruta coincida con la del proyecto)"
+                                 % (camino[-1], actual.get_name()))
+            actual.create_folder(camino[-1])
+            siguiente = buscar_unico(project, camino)
+            carpetas_creadas.append("/".join(camino))
+        actual = siguiente
+    return actual
+
+
+def quitar_accesores_sin_archivo(propiedad, carpeta):
+    """create_property crea siempre Get y Set. Si en disco solo esta uno, el
+    otro se quita: un Set vacio haria escribible una propiedad de solo lectura
+    y las escrituras se perderian sin error. Sin ninguno, se dejan los dos."""
+    accesores = list(propiedad.get_children())
+    sobrantes = [a for a in accesores if not os.path.isfile(os.path.join(carpeta, a.get_name() + ".st"))]
+    if len(sobrantes) < len(accesores):
+        for accesor in sobrantes:
+            accesor.remove()
+
+
+def crear_objeto(project, segmentos, declaracion, carpetas_creadas):
+    """Crea en el proyecto el objeto de un .st nuevo (y las carpetas que le
+    falten) y lo devuelve, aun con el contenido por defecto de CODESYS. Si no
+    se puede, lanza una excepcion con el motivo."""
+    nombre = segmentos[-1]
+    clase, declarado = _pou_paths.clasificar_declaracion(declaracion)
+    if clase is None:
+        raise ValueError("su declaracion no empieza por PROGRAM, FUNCTION_BLOCK, FUNCTION, TYPE,"
+                         " VAR_GLOBAL, INTERFACE, METHOD ni PROPERTY")
+    if declarado and declarado.lower() != nombre.lower():
+        raise ValueError("el archivo se llama %s pero su declaracion dice %s" % (nombre, declarado))
+
+    if clase in PADRES_ADMITIDOS:
+        padre = buscar_unico(project, segmentos[:-1]) if len(segmentos) > 1 else None
+        clase_padre = None
+        if padre is not None and hasattr(padre, "textual_declaration"):
+            clase_padre, _ = _pou_paths.clasificar_declaracion(padre.textual_declaration.text)
+        if clase_padre not in PADRES_ADMITIDOS[clase]:
+            raise ValueError("%s tiene que ir en la carpeta de su padre, que debe existir y ser uno de: %s"
+                             % (clase, ", ".join(PADRES_ADMITIDOS[clase])))
+        if clase == "METHOD":
+            return padre.create_method(nombre)
+        if clase == "ACTION":
+            return padre.create_action(nombre)
+        propiedad = padre.create_property(nombre)
+        quitar_accesores_sin_archivo(propiedad, os.path.join(src_dir, *segmentos))
+        return propiedad
+
+    contenedor = asegurar_carpetas(project, segmentos[:-1], carpetas_creadas)
+    if not hasattr(contenedor, "create_pou"):
+        raise ValueError("no se pueden crear objetos dentro de '%s'" % contenedor.get_name())
+    if clase == "PROGRAM":
+        return contenedor.create_pou(nombre, PouType.Program, ImplementationLanguages.st)
+    if clase == "FUNCTION_BLOCK":
+        return contenedor.create_pou(nombre, PouType.FunctionBlock, ImplementationLanguages.st)
+    if clase == "FUNCTION":
+        # CODESYS exige un tipo de retorno; el de verdad llega con la
+        # declaracion del archivo, que se aplica justo despues
+        return contenedor.create_pou(nombre, PouType.Function, ImplementationLanguages.st, "BOOL")
+    if clase == "INTERFACE":
+        return contenedor.create_interface(nombre)
+    if clase == "TYPE":
+        return contenedor.create_dut(nombre, DutType.Structure)
+    return contenedor.create_gvl(nombre)
+
+
+def comprobar_que_es_nuevo(ruta_relativa, registro):
+    """Solo se crea lo que nunca estuvo en el proyecto: recrear un objeto que
+    se borro o renombro en CODESYS desharia ese cambio sin que nadie lo pida."""
+    if registro is None:
+        raise ValueError("no hay registro previo de esta carpeta para saber si es nuevo o se borro"
+                         " en CODESYS: importa y vuelve a sincronizar")
+    if ruta_relativa.lower() in registro:
+        raise ValueError("ya estuvo en el proyecto y su objeto no esta, asi que se borro o renombro en"
+                         " CODESYS. Si ya no lo quieres, borra el .st; para volver a crearlo, sacalo"
+                         " de la carpeta, importa, vuelve a ponerlo y sincroniza")
+
+
 def sincronizar(project):
     if not os.path.isdir(src_dir):
         print("ERROR: no existe " + src_dir)
@@ -239,12 +354,20 @@ def sincronizar(project):
     if seleccion is not None:
         print("Archivos elegidos para sincronizar: %d" % len(seleccion))
 
+    registro = _estado_sync.leer(src_dir)
     actualizados = []
+    creados = []
+    carpetas_creadas = []
     avisos_sync = []
     vistos = set()
     hashes = {}
 
-    for carpeta_actual, _subcarpetas, archivos in os.walk(src_dir):
+    # os.walk va de arriba abajo: el .st de un POU se trata antes que los de
+    # sus metodos, que estan en una subcarpeta y necesitan que ya exista
+    for carpeta_actual, subcarpetas, archivos in os.walk(src_dir):
+        # Ni .git ni similares (la GUI tampoco las muestra): un .st de una
+        # copia de seguridad oculta acabaria creando objetos en el proyecto
+        subcarpetas[:] = [s for s in subcarpetas if not s.startswith(".")]
         for nombre_archivo in archivos:
             if not nombre_archivo.endswith(".st"):
                 continue
@@ -275,18 +398,25 @@ def sincronizar(project):
                 continue
 
             encontrados = project.find(System.Array[str](segmentos))
-            if len(encontrados) == 0:
-                avisos_sync.append(ruta_relativa + ": no existe ese POU en el proyecto (crealo una vez en la IDE de CODESYS y vuelve a importar)")
-                continue
             if len(encontrados) > 1:
                 avisos_sync.append(ruta_relativa + ": nombre ambiguo, %d coincidencias en el proyecto" % len(encontrados))
                 continue
 
-            pou = encontrados[0]
+            if len(encontrados) == 1:
+                pou = encontrados[0]
+                actualizados.append(ruta_relativa)
+            else:
+                try:
+                    comprobar_que_es_nuevo(ruta_relativa, registro)
+                    pou = crear_objeto(project, segmentos, declaracion, carpetas_creadas)
+                except Exception as e:
+                    avisos_sync.append(ruta_relativa + ": no se creo: " + str(e))
+                    continue
+                creados.append(ruta_relativa)
+
             avisos_pou = _pou_paths.aplicar_textos(pou, declaracion, implementacion)
             for a in avisos_pou:
                 avisos_sync.append(ruta_relativa + ": " + a)
-            actualizados.append(ruta_relativa)
             # Con avisos el POU no quedo igual que el archivo (se ignoro una
             # parte): no se da por sincronizado
             if not avisos_pou:
@@ -305,7 +435,14 @@ def sincronizar(project):
     for a in actualizados:
         print("  - " + a)
 
-    if actualizados:
+    for titulo, lista in (("Objetos creados en el proyecto", creados),
+                          ("Carpetas creadas en el proyecto", carpetas_creadas)):
+        if lista:
+            print("%s: %d" % (titulo, len(lista)))
+            for a in lista:
+                print("  - " + a)
+
+    if actualizados or creados:
         project.save()
         print("Proyecto guardado (para compilar, usa la accion Compilar aparte).")
         guardar_estado(hashes)

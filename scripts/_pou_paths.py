@@ -4,6 +4,8 @@
 # solo metodos de los objetos que le pasan los scripts que si la importan.
 # Por eso es seguro importarlo con un simple "import _pou_paths".
 
+import re
+
 MARCADOR_IMPLEMENTACION = "(*<<<CODESYS_IMPLEMENTATION>>>*)"
 
 # Se usa cuando el objeto no tiene esa parte como texto en absoluto:
@@ -13,6 +15,14 @@ MARCADOR_IMPLEMENTACION = "(*<<<CODESYS_IMPLEMENTATION>>>*)"
 #     (LD, FBD, CFC, o el propio grafo de un SFC), CODESYS no lo expone
 #     como texto editable via scripting.
 SIN_TEXTO = "(*<<<CODESYS_SIN_TEXTO_AQUI>>>*)"
+
+# Como empieza la declaracion de los objetos que llevan su nombre en ella
+_RE_DECLARACION = re.compile(
+    r"(PROGRAM|FUNCTION_BLOCK|FUNCTION|INTERFACE|METHOD|PROPERTY|TYPE)\b"
+    r"(?:\s+(?:PUBLIC|PRIVATE|PROTECTED|INTERNAL|ABSTRACT|FINAL)\b)*"
+    r"\s+(\w+)",
+    re.IGNORECASE | re.UNICODE)
+_RE_GVL = re.compile(r"VAR_GLOBAL\b", re.IGNORECASE)
 
 
 def es_pou_textual(obj):
@@ -61,6 +71,51 @@ def archivo_a_texto(contenido):
     return declaracion, implementacion
 
 
+def _saltar_encabezado(texto):
+    """Quita del principio de una declaracion los blancos, comentarios (los
+    (* *) pueden ir anidados) y pragmas {attribute ...}."""
+    i = 0
+    while i < len(texto):
+        if texto[i].isspace():
+            i += 1
+        elif texto.startswith("//", i) or texto.startswith("{", i):
+            fin = texto.find("\n" if texto[i] == "/" else "}", i)
+            i = len(texto) if fin < 0 else fin + 1
+        elif texto.startswith("(*", i):
+            nivel = 1
+            i += 2
+            while i < len(texto) and nivel:
+                if texto.startswith("(*", i):
+                    nivel += 1
+                    i += 2
+                elif texto.startswith("*)", i):
+                    nivel -= 1
+                    i += 2
+                else:
+                    i += 1
+        else:
+            break
+    return texto[i:]
+
+
+def clasificar_declaracion(declaracion):
+    """Que objeto describe la declaracion de un .st, como (clase, nombre):
+      - clase: "PROGRAM", "FUNCTION_BLOCK", "FUNCTION", "INTERFACE", "METHOD",
+        "PROPERTY", "TYPE", "GVL", "ACTION" (sin declaracion propia) o None si
+        no se reconoce (por ejemplo el VAR...END_VAR de un Get/Set)
+      - nombre: el que trae escrito la declaracion, None si no lleva (GVL y
+        acciones: su nombre es solo el del archivo)"""
+    if declaracion == SIN_TEXTO or not declaracion.strip():
+        return "ACTION", None
+    cuerpo = _saltar_encabezado(declaracion)
+    if _RE_GVL.match(cuerpo):
+        return "GVL", None
+    m = _RE_DECLARACION.match(cuerpo)
+    if m:
+        return m.group(1).upper(), m.group(2)
+    return None, None
+
+
 def aplicar_textos(obj, declaracion, implementacion):
     """Escribe declaracion/implementacion en obj. Devuelve una lista de
     avisos (texto) si el archivo trae contenido real para una parte que
@@ -71,13 +126,13 @@ def aplicar_textos(obj, declaracion, implementacion):
     if declaracion != SIN_TEXTO:
         if hasattr(obj, "textual_declaration"):
             obj.textual_declaration.replace(declaracion)
-        else:
+        elif declaracion.strip():
             avisos.append("trae texto de declaracion pero este objeto no admite declaracion textual (se ignoro)")
 
     if implementacion != SIN_TEXTO:
         if hasattr(obj, "textual_implementation"):
             obj.textual_implementation.replace(implementacion)
-        else:
+        elif implementacion.strip():
             avisos.append("trae texto de implementacion pero este objeto no admite implementacion textual, probablemente su cuerpo es grafico LD/FBD/CFC (se ignoro)")
 
     return avisos
